@@ -1,0 +1,2 @@
+# Apache 2.4 (XAMPP): never serve this folder directly
+Require all denied

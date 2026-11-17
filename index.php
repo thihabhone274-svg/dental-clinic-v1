@@ -1,30 +1,20 @@
 <?php
-require __DIR__ . '/../includes/bootstrap.php';
-require_can('patient.view');
-$f = ['q' => trim((string) ($_GET['q'] ?? '')), 'status' => in_array((string) ($_GET['status'] ?? 'active'), ['active', 'archived', 'all'], true) ? (string) ($_GET['status'] ?? 'active') : 'active',
-      'sort' => (string) ($_GET['sort'] ?? 'name')];
-$per = (int) cfg('page_size', 20);
-[, $total] = patient_search($f, 1, 0);
-[$page, $pages, $off] = paginate($total, $per);
-[$rows] = patient_search($f, $per, $off);
-$doctorOnly = !has_role('ADMIN') && !has_role('STAFF') && cfg('doctor_scope') !== 'all';
-page_start($doctorOnly ? 'My patients' : 'Patient directory', ['nav' => 'patients',
-    'subtitle' => $doctorOnly ? 'Only patients in your active care are listed: an appointment today or later, or an open visit with you.' : 'Search by registration number, name, telephone, NRC or exact date of birth (YYYY-MM-DD).',
-    'actions' => can('patient.write') ? '<a class="btn btn-primary" href="' . e(url('patients/create.php')) . '">Register patient</a>' : '']);
+require __DIR__.'/includes/bootstrap.php';$u=require_login();
+if(!v2_ready()){page_start('Finish your V2 upgrade',['nav'=>'dashboard','subtitle'=>'Your existing database and login are connected.']);?><section class="panel"><h2>One setup step remains</h2><p>Run <code>UPGRADE_V2.cmd</code> in the application folder. It adds the new workflow tables without deleting your accounts or patients.</p><a class="btn btn-primary" href="<?= e(url('index.php')) ?>">Check again</a></section><?php page_end();exit;}
+$today=date('Y-m-d');$doctorOnly=has_role('DOCTOR')&&!has_role('ADMIN')&&!has_role('STAFF');$scope=$doctorOnly?' AND doctor_id='.(int)$u['doctor_id']:'';
+$todayAppts=appt_list(['from'=>$today,'to'=>$today]);[$openVisits,$openCount]=visit_list(['status'=>'OPEN'],6,0);
+$waiting=(int)q_val("SELECT COUNT(*) FROM arrival_queue_entry WHERE status='WAITING'".($doctorOnly?' AND (expected_doctor_id IS NULL OR expected_doctor_id='.(int)$u['doctor_id'].')':''));
+$apptCount=(int)q_val('SELECT COUNT(*) FROM appointment WHERE start_at>=CURDATE() AND start_at<DATE_ADD(CURDATE(),INTERVAL 1 DAY)'.$scope);
+$closed=(int)q_val("SELECT COUNT(*) FROM clinical_visit WHERE status='CLOSED' AND closed_at>=CURDATE() AND closed_at<DATE_ADD(CURDATE(),INTERVAL 1 DAY)".$scope);
+$grace=max(0,workflow_setting('overdue_grace_minutes',60));$overdue=(int)q_val("SELECT COUNT(*) FROM appointment a WHERE a.status IN ('SCHEDULED','CONFIRMED') AND a.start_at<DATE_SUB(NOW(),INTERVAL $grace MINUTE) AND NOT EXISTS(SELECT 1 FROM clinical_visit v WHERE v.appointment_id=a.appointment_id) AND NOT EXISTS(SELECT 1 FROM arrival_queue_entry q WHERE q.appointment_id=a.appointment_id AND q.status='WAITING')".($doctorOnly?' AND a.doctor_id='.(int)$u['doctor_id']:''));
+page_start('Clinic overview',['nav'=>'dashboard','subtitle'=>date('l, j F Y').' · Ngwe La Yaung','actions'=>can('patient.write')?'<a class="btn btn-secondary" href="'.e(url('patients/create.php')).'">+ Register patient</a><a class="btn btn-primary" href="'.e(url('reception/checkin.php')).'">Check in patient</a>':'<a class="btn btn-primary" href="'.e(url('reception/index.php')).'">Open waiting queue</a>']);
 ?>
-<form method="get" class="filters" role="search">
-  <?= f_text('q', 'Search', $f, [], ['maxlength' => 100]) ?>
-  <?= f_select('status', 'Show', ['active' => 'Active', 'archived' => 'Archived', 'all' => 'All'], $f, []) ?>
-  <?= f_select('sort', 'Sort by', ['name' => 'Name', 'code' => 'Registration number', 'recent' => 'Newest first'], $f, []) ?>
-  <div class="field"><label>&nbsp;</label><button class="btn btn-primary">Search</button> <a class="btn btn-secondary" href="?">Clear</a></div>
-</form>
-<?php if (!$rows): ?>
-  <div class="empty-state"><h2>No matching patients</h2><p><?= $doctorOnly ? 'Doctors see only patients in active care. Ask staff to book an appointment or open a visit.' : 'Check the spelling, or register a new patient.' ?></p>
-  <?php if (can('patient.write')): ?><a class="btn btn-primary" href="<?= e(url('patients/create.php')) ?>">Register patient</a><?php endif; ?></div>
-<?php else: ?>
-<div class="table-wrap"><table class="table"><thead><tr><th>Reg. no.</th><th>Name</th><th>Date of birth</th><th>Telephone</th><th>Last visit</th><th>Status</th></tr></thead><tbody>
-<?php foreach ($rows as $r): ?><tr><td><a href="<?= e(url('patients/view.php?id=' . $r['patient_id'])) ?>"><?= e($r['patient_code']) ?></a></td><td><a href="<?= e(url('patients/view.php?id=' . $r['patient_id'])) ?>"><?= e($r['full_name']) ?></a></td>
-<td><?= e(fmt_date($r['date_of_birth'])) ?></td><td><?= e($r['phone'] ?? '') ?></td><td><?= e(fmt_date($r['last_visit'])) ?></td><td><?= status_badge($r['archived_at'] ? 'ARCHIVED' : 'ACTIVE') ?></td></tr><?php endforeach; ?></tbody></table></div>
-<p class="muted"><?= (int) $total ?> patient(s)</p><?= pager($page, $pages, array_filter($f, fn($x) => $x !== '')) ?>
-<?php endif; ?>
+<section class="overview-hero"><div><span class="eyebrow">A clear view of your clinic</span><h2>Good <?= (int)date('H')<12?'morning':((int)date('H')<17?'afternoon':'evening') ?>, <?= e($u['display_name']) ?>.</h2><p><?= $doctorOnly?'Your patients, clinical work and next steps in one place.':'From the first check-in to the last completed visit.' ?></p><a href="<?= e(url('reception/index.php')) ?>">View the live queue <span aria-hidden="true">→</span></a></div><div class="hero-today"><span class="live-dot"></span><strong><?= $waiting ?></strong><span>waiting for care</span></div></section>
+<div class="cards overview-stats"><?php foreach([[$apptCount,'Appointments today','appointments/index.php?from='.$today.'&to='.$today,'calendar'],[$waiting,'Patients waiting','reception/index.php','queue'],[$openCount,'Visits in progress','visits/index.php?status=OPEN','visits'],[$closed,'Completed today','visits/index.php?status=CLOSED&from='.$today.'&to='.$today,'check']] as [$number,$caption,$href,$icon]):?><a class="card stat" href="<?= e(url($href)) ?>"><div class="stat-top"><?= ui_icon($icon) ?><span>Today</span></div><span class="stat-n"><?= $number ?></span><span class="stat-t"><?= e($caption) ?></span></a><?php endforeach;?></div>
+<?php if($overdue && can('appointment.write')):?><div class="alert alert-warn row-between"><span><strong><?= $overdue ?> booking<?= $overdue===1?'':'s' ?> need review.</strong> More than <?= $grace ?> minutes past the appointment time, with no arrival or visit.</span><a href="<?= e(url('appointments/review.php')) ?>">Review overdue bookings →</a></div><?php endif;?>
+<div class="dashboard-grid"><section class="panel"><div class="row-between"><div><span class="eyebrow">The day ahead</span><h2>Today’s appointments</h2></div><a href="<?= e(url('appointments/index.php?from='.$today.'&to='.$today)) ?>">View schedule →</a></div>
+<?php if(!$todayAppts):?><div class="empty-state"><h3>A little room in today’s schedule</h3><p>No appointments booked for today. Walk-ins can still be checked in.</p><?php if(can('appointment.write')):?><a class="btn btn-secondary" href="<?= e(url('appointments/form.php')) ?>">Book an appointment</a><?php endif;?></div><?php else:?><div class="schedule-list"><?php foreach(array_slice($todayAppts,0,8) as $a):?><a class="schedule-row" href="<?= e(url('appointments/view.php?id='.$a['appointment_id'])) ?>"><div class="time-block"><?= e(date('H:i',strtotime($a['start_at']))) ?></div><div class="schedule-person"><strong><?= e($a['patient_name']) ?></strong><small><?= e($a['doctor_name'].' · '.($a['reason']?:'Dental appointment')) ?></small></div><?= status_badge($a['status']) ?><span aria-hidden="true">↗</span></a><?php endforeach;?></div><?php endif;?></section>
+<aside><section class="panel"><span class="eyebrow">Continue care</span><h2>Open visits</h2><?php if(!$openVisits):?><p class="muted">No open visits. Start a patient from the waiting queue.</p><?php endif;foreach($openVisits as $v):?><a class="open-visit" href="<?= e(url('visits/view.php?id='.$v['visit_id'])) ?>"><div class="avatar"><?= e(mb_substr($v['patient_name'],0,1)) ?></div><div><strong><?= e($v['patient_name']) ?></strong><small><?= e($v['visit_no'].' · '.label($v['workflow_mode'])) ?></small></div><span>→</span></a><?php endforeach;?></section>
+<section class="panel quick-links"><h3>Quick actions</h3><a href="<?= e(url('patients/index.php')) ?>"><?= ui_icon('patients') ?> Find patient <span>→</span></a><a href="<?= e(url('reception/index.php')) ?>"><?= ui_icon('queue') ?> Waiting queue <span>→</span></a><?php if(can('appointment.write')):?><a href="<?= e(url('appointments/form.php')) ?>"><?= ui_icon('calendar') ?> Book follow-up <span>→</span></a><?php endif;?></section></aside></div>
+<?php if(can('admin.accounts') && !q_val("SELECT 1 FROM doctor WHERE profile_status='ACTIVE' LIMIT 1")):?><div class="alert alert-info"><strong>Add a doctor to begin clinical work.</strong> Go to <a href="<?= e(url('admin/accounts.php')) ?>">Accounts and roles</a> and create a Doctor account. Admin access alone does not authorize clinical work.</div><?php endif;?>
 <?php page_end();

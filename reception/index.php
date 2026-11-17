@@ -1,0 +1,18 @@
+<?php
+require __DIR__.'/../includes/bootstrap.php';$u=require_login();v2_require();$history=($_GET['view']??'')==='today';$rows=queue_rows($history);
+page_start('Reception & waiting queue',['nav'=>'reception','subtitle'=>'One clear handover from the front desk to the doctor.','actions'=>can('appointment.write')?'<a class="btn btn-primary" href="'.e(url('reception/checkin.php')).'">+ Check in patient</a>':'']);
+?>
+<div class="tabs"><a class="<?= !$history?'on':'' ?>" href="?">Waiting now</a><a class="<?= $history?'on':'' ?>" href="?view=today">Today’s arrivals</a><a href="<?= e(url('visits/index.php?status=OPEN')) ?>">Open visits</a></div>
+<div class="queue-heading"><span class="live-dot"></span><strong><?= count($rows) ?> <?= $history?'arrivals today':'patients waiting' ?></strong><a class="btn btn-secondary btn-sm" href="<?= $history?'?view=today':'?' ?>">Refresh queue</a></div>
+<?php if(!$rows):?><section class="empty-state"><div class="empty-symbol">✓</div><h2><?= $history?'No arrivals recorded today':'The waiting queue is clear' ?></h2><p>Check in an appointment or a walk-in patient to get started.</p></section><?php endif;?>
+<div class="queue-grid"><?php foreach($rows as $r):?><article class="panel queue-card"><div class="row-between"><span class="eyebrow">Arrival #<?= (int)$r['arrival_id'] ?></span><?= status_badge($r['status']) ?></div><h2><?= e($r['full_name']) ?></h2><p class="muted"><?= e($r['patient_code']) ?> · <?= e(label($r['origin'])) ?></p>
+<div class="queue-meta"><span><?= e($r['expected_doctor']?:'Any available doctor') ?></span><strong><?= $r['status']==='WAITING'?max(0,(int)$r['waiting_minutes']).' min waiting':e(fmt_dt($r['arrived_at'])) ?></strong></div>
+<?php if($r['reception_note']):?><p class="pre"><?= e($r['reception_note']) ?></p><?php endif;?>
+<?php if($r['status']==='WAITING'):?>
+<?php if($u['doctor_id'] && can('exam.write') && (!$r['expected_doctor_id'] || (int)$r['expected_doctor_id']===(int)$u['doctor_id'])):?>
+<form method="post" action="<?= e(url('reception/action.php')) ?>"><?= csrf_field() ?><input type="hidden" name="arrival_id" value="<?= (int)$r['arrival_id'] ?>"><input type="hidden" name="action" value="claim">
+<?= f_select('mode','Visit workflow',['QUICK'=>'Quick · note and treatment','STANDARD'=>'Standard · full examination'],[],[],['placeholder'=>'Choose Quick or Standard','required'=>true]) ?><button class="btn btn-primary btn-block">Start my visit</button></form>
+<?php elseif(!$u['doctor_id']):?><p class="hint">Waiting for the responsible doctor to start the visit.</p><?php else:?><p class="hint">Assigned to another doctor.</p><?php endif;?>
+<?php if(can('appointment.write')):?><details class="drop"><summary class="btn btn-ghost btn-sm">Cancel arrival</summary><form method="post" action="<?= e(url('reception/action.php')) ?>" class="drop-body"><?= csrf_field() ?><input type="hidden" name="arrival_id" value="<?= (int)$r['arrival_id'] ?>"><input type="hidden" name="action" value="cancel"><?= f_textarea('reason','Reason',[],[],['required'=>true]) ?><button class="btn btn-danger">Cancel arrival</button></form></details><?php if($r['appointment_id']):?><a class="btn btn-ghost btn-sm" href="<?= e(url('appointments/reassign.php?id='.$r['appointment_id'])) ?>">Reassign doctor</a><?php endif;endif;?>
+<?php elseif($r['visit_id'] && (has_role('ADMIN')||has_role('STAFF')||(int)$r['claimed_by']===(int)$u['user_id'])):?><a class="btn btn-secondary" href="<?= e(url('visits/view.php?id='.$r['visit_id'])) ?>">Open <?= e($r['visit_no']) ?></a><?php elseif($r['status']==='CANCELLED'):?><p class="hint">Cancelled: <?= e($r['cancel_reason']) ?></p><?php endif;?>
+</article><?php endforeach;?></div><?php page_end();
